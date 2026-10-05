@@ -92,10 +92,37 @@ async fn run(terminal: &mut Term) -> Result<()> {
             _ = tick.tick() => {}
         }
         app.tick_toast();
+        if let Some(target) = app.ssh_target.take() {
+            run_ssh(terminal, &target)?;
+            app.mouse_on = true; // capture is re-enabled on restore
+            terminal.clear()?;
+        }
         if app.should_quit {
             break;
         }
         terminal.draw(|f| ui::draw(f, &mut app))?;
     }
+    Ok(())
+}
+
+/// Suspend the TUI, run an interactive `ssh` session inheriting the terminal,
+/// then restore the alternate screen and input modes.
+fn run_ssh(terminal: &mut Term, target: &str) -> Result<()> {
+    use std::process::Command;
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
+    let _ = Command::new("ssh").arg(target).status();
+    enable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     Ok(())
 }

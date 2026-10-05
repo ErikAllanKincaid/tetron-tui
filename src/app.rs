@@ -6,10 +6,13 @@
 //! and daemon stop/start. Text entry uses a modal input with bracketed paste.
 
 use crossterm::event::{
-    Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
+    DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, MouseButton,
+    MouseEvent, MouseEventKind,
 };
+use crossterm::execute;
 use ratatui::layout::Rect;
 use std::collections::HashMap;
+use std::io::Write;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -94,6 +97,15 @@ pub struct App {
     admins_req: Option<String>,
     /// Clickable regions from the last render.
     pub hits: Hits,
+    /// Whether mouse capture is on. Toggling off lets the terminal do native
+    /// text selection (copy IPs/keys/names) at the cost of in-app clicks.
+    pub mouse_on: bool,
+    /// Set true once the user moves the selection, so the initial
+    /// auto-focus-a-connected-peer does not fight their choice afterward.
+    user_picked: bool,
+    /// An SSH target (overlay IP) the main loop should connect to, suspending
+    /// the TUI for the session.
+    pub ssh_target: Option<String>,
     action_tx: UnboundedSender<Action>,
 }
 
@@ -113,6 +125,9 @@ impl App {
             admins: None,
             admins_req: None,
             hits: Hits::default(),
+            mouse_on: true,
+            user_picked: false,
+            ssh_target: None,
             action_tx,
         }
     }
@@ -139,6 +154,16 @@ impl App {
                 self.snapshot = Some(snap);
                 self.down_reason = None;
                 self.clamp();
+                // Until the user navigates, focus the first connected peer so
+                // the Transport/History tabs show live data by default.
+                if !self.user_picked {
+                    if let Some(i) = self
+                        .cur_net()
+                        .and_then(|n| n.peers.iter().position(|p| p.conn.is_some()))
+                    {
+                        self.sel_peer = i;
+                    }
+                }
             }
             ConnStatus::Down(reason) => {
                 self.snapshot = None;
@@ -226,6 +251,7 @@ impl App {
         let peer = self.hits.peers.iter().position(|r| hit(r, col, row));
         if let Some(i) = peer {
             if i < self.peer_count() {
+                self.user_picked = true;
                 self.sel_peer = i;
             }
         }
@@ -240,7 +266,13 @@ impl App {
         match self.mode {
             Mode::Input { .. } => return self.input_key(k),
             Mode::Invite { .. } => {
-                if matches!(k.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) {
+                if matches!(k.code, KeyCode::Char('y') | KeyCode::Char('c')) {
+                    if let Mode::Invite { code, .. } = &self.mode {
+                        let code = code.clone();
+                        self.copy_clipboard(&code);
+                        self.set_toast("invite code copied", false);
+                    }
+                } else if matches!(k.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) {
                     self.mode = Mode::Normal;
                 }
                 return;
@@ -321,6 +353,10 @@ impl App {
             KeyCode::Char('K') => self.kick_sel(),
             KeyCode::Char('L') => self.leave_sel(),
             KeyCode::Char('X') => self.nuke_sel(),
+            // Selection / SSH helpers.
+            KeyCode::Char('m') => self.toggle_mouse(),
+            KeyCode::Char('y') => self.copy_sel_ip(),
+            KeyCode::Enter => self.ssh_sel(),
             _ => {}
         }
     }
@@ -450,6 +486,52 @@ impl App {
         let _ = self.action_tx.send(a);
     }
 
+    // --- selection / clipboard / ssh --------------------------------------
+
+    /// Toggle mouse capture so the terminal can do native text selection.
+    fn toggle_mouse(&mut self) {
+        self.mouse_on = !self.mouse_on;
+        let mut out = std::io::stdout();
+        let _ = if self.mouse_on {
+            execute!(out, EnableMouseCapture)
+        } else {
+            execute!(out, DisableMouseCapture)
+        };
+        self.set_toast(
+            if self.mouse_on { "mouse on (click to select)" } else { "mouse off (drag to select text)" },
+            false,
+        );
+    }
+
+    /// Copy the selected peer's overlay IP to the clipboard (OSC 52).
+    fn copy_sel_ip(&mut self) {
+        let Some(ip) = self.cur_peer().map(|p| p.ip.clone()) else { return };
+        self.copy_clipboard(&ip);
+        self.set_toast(format!("copied {ip}"), false);
+    }
+
+    /// Request an SSH session to the selected peer (handled by the main loop,
+    /// which suspends the TUI). Offline peers are refused.
+    fn ssh_sel(&mut self) {
+        let info = self.cur_peer().map(|p| (p.conn.is_some(), p.ip.clone(), p.hostname.clone()));
+        let Some((connected, ip, host)) = info else { return };
+        if !connected {
+            self.set_toast(format!("{host} is offline"), true);
+            return;
+        }
+        self.set_toast(format!("ssh {ip}…"), false);
+        self.ssh_target = Some(ip);
+    }
+
+    /// Put `text` on the terminal's clipboard via OSC 52 (works over SSH when
+    /// the terminal supports it).
+    fn copy_clipboard(&self, text: &str) {
+        let seq = format!("\x1b]52;c;{}\x07", base64(text.as_bytes()));
+        let mut out = std::io::stdout();
+        let _ = out.write_all(seq.as_bytes());
+        let _ = out.flush();
+    }
+
     /// Switch panes; fetch key-holders when entering the Admin tab.
     fn set_tab(&mut self, t: Tab) {
         self.tab = t;
@@ -497,6 +579,7 @@ impl App {
         if n == 0 {
             return;
         }
+        self.user_picked = true;
         self.sel_peer = wrap(self.sel_peer, d, n);
     }
 
@@ -543,6 +626,23 @@ fn wrap(cur: usize, d: i32, n: usize) -> usize {
 /// Point-in-rect test for a cell coordinate.
 fn hit(r: &Rect, col: u16, row: u16) -> bool {
     col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
+}
+
+/// Minimal standard base64 (for OSC 52 clipboard payloads).
+fn base64(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        out.push(T[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { T[((n >> 6) & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
+    }
+    out
 }
 
 /// Render an invite code as a unicode half-block QR. Falls back to a note if

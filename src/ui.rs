@@ -82,7 +82,7 @@ fn draw_hintbar(f: &mut Frame, area: Rect, app: &App) {
         f.render_widget(Paragraph::new(line), area);
         return;
     }
-    let hint = "q quit · ? help · Tab pane · ←→ net · ↑↓ peer · c/d conn · i invite · n new · J join · S stop";
+    let hint = "q quit · ? help · ↵ ssh · y copy-ip · m mouse · c/d conn · i invite · n new · J join";
     f.render_widget(Paragraph::new(Span::styled(hint, Style::new().fg(C_DIM))), area);
 }
 
@@ -112,6 +112,7 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
         }
     }
     lines.push(Line::raw(""));
+    lines.push(Line::styled("  ↵ ssh peer  y copy-ip", Style::new().fg(C_DIM)));
     lines.push(Line::styled("  c connect   d standby", Style::new().fg(C_DIM)));
     lines.push(Line::styled("  C/D all     i invite", Style::new().fg(C_DIM)));
     lines.push(Line::styled("  n new net   J join", Style::new().fg(C_DIM)));
@@ -308,11 +309,28 @@ fn draw_transport(f: &mut Frame, area: Rect, peer: Option<&PeerSnap>) {
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
 
+/// Resolve a key-holder short id to a readable name via the peer list.
+fn admin_name(net: &NetSnap, short_id: &str, is_self: bool) -> String {
+    if is_self {
+        return net.my_hostname.clone().unwrap_or_else(|| "you".into());
+    }
+    net.peers
+        .iter()
+        .find(|p| p.key.starts_with(short_id))
+        .map(|p| p.hostname.clone())
+        .unwrap_or_else(|| "?".into())
+}
+
 fn draw_history(f: &mut Frame, area: Rect, app: &App) {
     let Some(p) = app.cur_peer() else {
         f.render_widget(Paragraph::new(Span::styled("no peer selected", Style::new().fg(C_DIM))), area);
         return;
     };
+    if p.conn.is_none() {
+        let msg = format!("{} is offline — no live traffic history", p.hostname);
+        f.render_widget(Paragraph::new(Span::styled(msg, Style::new().fg(C_DIM))), area);
+        return;
+    }
     let Some(hist) = app.history.get(&p.key) else {
         f.render_widget(
             Paragraph::new(Span::styled("collecting history…", Style::new().fg(C_DIM))),
@@ -383,9 +401,13 @@ fn draw_help(f: &mut Frame) {
         key("←/→ h/l", "select network"),
         key("Tab 1-4", "switch pane (Peers/Transport/History/Admin)"),
         Line::raw(""),
+        key("Enter", "ssh to the selected peer (overlay IP)"),
+        key("y", "copy selected peer IP to clipboard"),
+        key("m", "toggle mouse (off = drag to select text)"),
+        Line::raw(""),
         key("c / d", "connect / standby selected network"),
         key("C / D", "connect / standby ALL networks"),
-        key("i", "create invite (shows code + QR)"),
+        key("i", "create invite (shows code + QR, y copies)"),
         key("n", "new network      J  join by invite code"),
         key("S", "stop daemon  ·  s: start (when down)"),
         Line::raw(""),
@@ -508,7 +530,8 @@ fn draw_admin(f: &mut Frame, area: Rect, net: &NetSnap, app: &App) {
         lines.push(Line::raw(""));
         lines.push(Line::styled("⚠ pending nuke proposals", Style::new().fg(C_BAD).bold()));
         for (sid, _at) in &net.nuke_proposals {
-            lines.push(Line::styled(format!("   by {sid}  (X to second)"), Style::new().fg(C_WARN)));
+            let name = admin_name(net, sid, false);
+            lines.push(Line::styled(format!("   by {name} ({sid})  (X to second)"), Style::new().fg(C_WARN)));
         }
     }
 
@@ -521,11 +544,12 @@ fn draw_admin(f: &mut Frame, area: Rect, net: &NetSnap, app: &App) {
                 lines.push(Line::styled("  (none)", Style::new().fg(C_DIM)));
             }
             for (sid, is_self) in admins {
-                let tag = if *is_self { "  (you)" } else { "" };
+                let name = admin_name(net, sid, *is_self);
                 lines.push(Line::from(vec![
                     Span::styled("  ● ", Style::new().fg(C_ACCENT)),
-                    Span::raw(sid.clone()),
-                    Span::styled(tag, Style::new().fg(C_DIM)),
+                    Span::styled(format!("{:<16}", trunc(&name, 16)), Style::new()),
+                    Span::styled(sid.clone(), Style::new().fg(C_DIM)),
+                    Span::styled(if *is_self { "  (you)" } else { "" }, Style::new().fg(C_DIM)),
                 ]));
             }
         }

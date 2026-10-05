@@ -29,6 +29,8 @@ pub struct NetSnap {
     /// The network's own key (needed to address Kick/Nuke). `None` on a daemon
     /// predating the field.
     pub network_key: Option<String>,
+    /// The local node's hostname on this network (for the Admin "you" row).
+    pub my_hostname: Option<String>,
     pub my_ip: String,
     pub subnet: String,
     pub tun_name: String,
@@ -98,6 +100,7 @@ pub fn map_status(msg: IpcMessage) -> Option<Snapshot> {
             name: n.network,
             role: n.role.to_string(),
             network_key: n.network_key,
+            my_hostname: n.my_hostname,
             my_ip: n.my_ip.to_string(),
             subnet: n.subnet,
             tun_name: n.tun_name,
