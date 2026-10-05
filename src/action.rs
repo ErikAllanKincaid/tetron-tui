@@ -21,6 +21,17 @@ pub enum Action {
     Shutdown,
     /// Start the daemon via its systemd unit.
     StartDaemon,
+    // --- admin (slice C) ---
+    /// Grant the network key to a peer, making it a co-coordinator.
+    AdminAdd { network: String, peer: String },
+    /// Fetch the network's key-holders (open read).
+    AdminList { network: String },
+    /// Remove a member from a closed network (coordinator-only).
+    Kick { network_key: String, endpoint_id: String },
+    /// Propose/execute a nuke, or second a pending proposal.
+    Nuke { network_key: String, second: Option<String> },
+    /// Leave a network.
+    Leave { network: String },
 }
 
 /// The outcome of an [`Action`], reported back to the UI.
@@ -32,6 +43,8 @@ pub enum ActionResult {
     Err(String),
     /// A freshly minted invite to show as text + QR.
     Invite { network: String, code: String, id: String },
+    /// The key-holders of a network (short_id, is_self), for the Admin tab.
+    Admins { network: String, admins: Vec<(String, bool)> },
 }
 
 /// Drain the action queue, running each on its own task.
@@ -121,6 +134,47 @@ async fn exec(a: Action) -> ActionResult {
             let _ = round_trip(IpcMessage::Shutdown).await;
             ActionResult::Ok("daemon stopping…".into())
         }
+
+        Action::AdminAdd { network, peer } => {
+            simple(IpcMessage::AdminAdd { network, peer }, "granted key").await
+        }
+
+        Action::AdminList { network } => {
+            match round_trip(IpcMessage::AdminList { network: network.clone() }).await {
+                Ok(IpcMessage::AdminListResponse { admins }) => ActionResult::Admins {
+                    network,
+                    admins: admins.into_iter().map(|a| (a.short_id, a.self_node)).collect(),
+                },
+                Ok(IpcMessage::Error { message }) => ActionResult::Err(message),
+                Ok(_) => ActionResult::Err("unexpected reply to admin-list".into()),
+                Err(e) => ActionResult::Err(e),
+            }
+        }
+
+        Action::Kick { network_key, endpoint_id } => {
+            simple(IpcMessage::Kick { network_key, endpoint_id }, "kicked member").await
+        }
+
+        Action::Nuke { network_key, second } => {
+            let verb = if second.is_some() { "seconded nuke" } else { "nuke requested" };
+            simple(IpcMessage::Nuke { network_key, force: false, cancel: false, second }, verb).await
+        }
+
+        Action::Leave { network } => {
+            simple(IpcMessage::Leave { network, force: false }, "left network").await
+        }
+    }
+}
+
+/// Send a request whose success is a plain `Ok`/`Error`, mapping to a toast.
+async fn simple(msg: IpcMessage, ok_label: &str) -> ActionResult {
+    match round_trip(msg).await {
+        Ok(IpcMessage::Ok { message }) => {
+            ActionResult::Ok(if message.is_empty() { ok_label.to_string() } else { message })
+        }
+        Ok(IpcMessage::Error { message }) => ActionResult::Err(message),
+        Ok(_) => ActionResult::Ok(ok_label.to_string()),
+        Err(e) => ActionResult::Err(e),
     }
 }
 

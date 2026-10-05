@@ -40,7 +40,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match &app.mode {
         Mode::Input { kind, buf } => draw_input(f, *kind, buf),
         Mode::Invite { network, code, id, qr } => draw_invite(f, network, code, id, qr),
-        Mode::ConfirmStop => draw_confirm(f),
+        Mode::Confirm { prompt, .. } => draw_confirm(f, prompt),
         Mode::Normal => {
             if app.show_help {
                 draw_help(f);
@@ -132,6 +132,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
         Tab::Peers => draw_peers(f, rows[2], net, app.sel_peer),
         Tab::Transport => draw_transport(f, rows[2], app.cur_peer()),
         Tab::History => draw_history(f, rows[2], app),
+        Tab::Admin => draw_admin(f, rows[2], net, app),
     }
 }
 
@@ -363,14 +364,19 @@ fn draw_help(f: &mut Frame) {
         Line::raw(""),
         key("↑/↓ j/k", "select peer"),
         key("←/→ h/l", "select network"),
-        key("Tab 1 2 3", "switch pane"),
+        key("Tab 1-4", "switch pane (Peers/Transport/History/Admin)"),
         Line::raw(""),
         key("c / d", "connect / standby selected network"),
         key("C / D", "connect / standby ALL networks"),
         key("i", "create invite (shows code + QR)"),
-        key("n", "new network"),
-        key("J", "join by invite code"),
+        key("n", "new network      J  join by invite code"),
         key("S", "stop daemon  ·  s: start (when down)"),
+        Line::raw(""),
+        Line::styled("  admin (coordinator):", Style::new().fg(C_DIM).italic()),
+        key("a", "grant admin key to selected peer"),
+        key("K", "kick selected peer"),
+        key("X", "nuke network / second a proposal"),
+        key("L", "leave network"),
         Line::raw(""),
         key("? ", "this help      q / Esc  quit"),
         Line::raw(""),
@@ -444,25 +450,81 @@ fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str) {
     f.render_widget(Paragraph::new(lines).alignment(Alignment::Center).wrap(Wrap { trim: false }), inner);
 }
 
-fn draw_confirm(f: &mut Frame) {
-    let area = centered(f.area(), 54, 7);
+fn draw_confirm(f: &mut Frame, prompt: &str) {
+    let w = 60u16.min(f.area().width.saturating_sub(2));
+    let area = centered(f.area(), w, 7);
     f.render_widget(Clear, area);
     let lines = vec![
         Line::raw(""),
-        Line::styled("Stop the tetron daemon?", Style::new().fg(C_BAD).bold()),
-        Line::styled("This severs this UI's control socket.", Style::new().fg(C_DIM)),
+        Line::styled(prompt.to_string(), Style::new().fg(C_BAD).bold()),
         Line::raw(""),
         Line::from(vec![
             Span::styled("y", Style::new().fg(C_ACCENT).bold()),
-            Span::styled(" stop    ", Style::new().fg(C_DIM)),
+            Span::styled(" yes    ", Style::new().fg(C_DIM)),
             Span::styled("n/Esc", Style::new().fg(C_ACCENT).bold()),
             Span::styled(" cancel", Style::new().fg(C_DIM)),
         ]),
     ];
     f.render_widget(
-        Paragraph::new(lines).alignment(Alignment::Center).block(Block::default().borders(Borders::ALL)),
+        Paragraph::new(lines)
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).border_style(Style::new().fg(C_BAD))),
         area,
     );
+}
+
+fn draw_admin(f: &mut Frame, area: Rect, net: &NetSnap, app: &App) {
+    let mut lines = Vec::new();
+    let role_col = if net.is_admin() { C_OK } else { C_DIM };
+    lines.push(Line::from(vec![
+        Span::styled("role    ", Style::new().fg(C_DIM)),
+        Span::styled(net.role.clone(), Style::new().fg(role_col).bold()),
+        Span::styled(
+            format!("   key {}", net.network_key.clone().unwrap_or_else(|| "-".into())),
+            Style::new().fg(C_DIM),
+        ),
+    ]));
+
+    // Pending nuke proposals (NUKE-CONSENSUS).
+    if !net.nuke_proposals.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled("⚠ pending nuke proposals", Style::new().fg(C_BAD).bold()));
+        for (sid, _at) in &net.nuke_proposals {
+            lines.push(Line::styled(format!("   by {sid}  (X to second)"), Style::new().fg(C_WARN)));
+        }
+    }
+
+    // Key-holders, fetched via AdminList.
+    lines.push(Line::raw(""));
+    lines.push(Line::styled("key-holders", Style::new().fg(C_DIM).bold()));
+    match &app.admins {
+        Some((n, admins)) if n == &net.name => {
+            if admins.is_empty() {
+                lines.push(Line::styled("  (none)", Style::new().fg(C_DIM)));
+            }
+            for (sid, is_self) in admins {
+                let tag = if *is_self { "  (you)" } else { "" };
+                lines.push(Line::from(vec![
+                    Span::styled("  ● ", Style::new().fg(C_ACCENT)),
+                    Span::raw(sid.clone()),
+                    Span::styled(tag, Style::new().fg(C_DIM)),
+                ]));
+            }
+        }
+        _ => lines.push(Line::styled("  loading…", Style::new().fg(C_DIM))),
+    }
+
+    // Action legend.
+    lines.push(Line::raw(""));
+    let gate = if net.is_admin() { "" } else { "  (admins only, except Leave)" };
+    lines.push(Line::styled(format!("actions{gate}"), Style::new().fg(C_DIM).bold()));
+    lines.push(Line::styled("  a grant-admin to selected peer", Style::new().fg(C_DIM)));
+    lines.push(Line::styled("  K kick selected peer", Style::new().fg(C_DIM)));
+    lines.push(Line::styled("  X nuke / second proposal", Style::new().fg(C_DIM)));
+    lines.push(Line::styled("  L leave this network", Style::new().fg(C_DIM)));
+
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
 
 // --- small helpers ---------------------------------------------------------

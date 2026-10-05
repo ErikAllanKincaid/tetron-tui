@@ -23,17 +23,19 @@ pub enum Tab {
     Peers,
     Transport,
     History,
+    Admin,
 }
 
 impl Tab {
-    pub fn all() -> [Tab; 3] {
-        [Tab::Peers, Tab::Transport, Tab::History]
+    pub fn all() -> [Tab; 4] {
+        [Tab::Peers, Tab::Transport, Tab::History, Tab::Admin]
     }
     pub fn title(self) -> &'static str {
         match self {
             Tab::Peers => "Peers",
             Tab::Transport => "Transport",
             Tab::History => "History",
+            Tab::Admin => "Admin",
         }
     }
 }
@@ -49,7 +51,8 @@ pub enum Mode {
     Normal,
     Input { kind: InputKind, buf: String },
     Invite { network: String, code: String, id: String, qr: String },
-    ConfirmStop,
+    /// A yes/no gate before firing a (possibly destructive) action.
+    Confirm { prompt: String, action: Action },
 }
 
 pub struct Toast {
@@ -69,6 +72,11 @@ pub struct App {
     pub history: HashMap<String, PeerHistory>,
     pub mode: Mode,
     pub toast: Option<Toast>,
+    /// Key-holders of a network (name, [(short_id, is_self)]), for the Admin
+    /// tab. Fetched on demand via `AdminList`.
+    pub admins: Option<(String, Vec<(String, bool)>)>,
+    /// The network an AdminList is currently requested/cached for (dedupe).
+    admins_req: Option<String>,
     action_tx: UnboundedSender<Action>,
 }
 
@@ -85,6 +93,8 @@ impl App {
             history: HashMap::new(),
             mode: Mode::Normal,
             toast: None,
+            admins: None,
+            admins_req: None,
             action_tx,
         }
     }
@@ -127,6 +137,9 @@ impl App {
                 let qr = build_qr(&code);
                 self.mode = Mode::Invite { network, code, id, qr };
             }
+            ActionResult::Admins { network, admins } => {
+                self.admins = Some((network, admins));
+            }
         }
     }
 
@@ -168,15 +181,14 @@ impl App {
                 }
                 return;
             }
-            Mode::ConfirmStop => {
-                match k.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => {
-                        self.act(Action::Shutdown);
-                        self.set_toast("stopping daemon…", false);
+            Mode::Confirm { .. } => {
+                let yes = matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y'));
+                if let Mode::Confirm { action, .. } = std::mem::replace(&mut self.mode, Mode::Normal) {
+                    if yes {
+                        self.act(action);
+                        self.set_toast("working…", false);
                     }
-                    _ => {}
                 }
-                self.mode = Mode::Normal;
                 return;
             }
             Mode::Normal => {}
@@ -207,9 +219,10 @@ impl App {
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Tab => self.cycle_tab(1),
             KeyCode::BackTab => self.cycle_tab(-1),
-            KeyCode::Char('1') => self.tab = Tab::Peers,
-            KeyCode::Char('2') => self.tab = Tab::Transport,
-            KeyCode::Char('3') => self.tab = Tab::History,
+            KeyCode::Char('1') => self.set_tab(Tab::Peers),
+            KeyCode::Char('2') => self.set_tab(Tab::Transport),
+            KeyCode::Char('3') => self.set_tab(Tab::History),
+            KeyCode::Char('4') => self.set_tab(Tab::Admin),
             KeyCode::Up | KeyCode::Char('k') => self.move_peer(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_peer(1),
             KeyCode::Left | KeyCode::Char('h') => self.move_net(-1),
@@ -233,7 +246,17 @@ impl App {
             }
             KeyCode::Char('J') => self.mode = Mode::Input { kind: InputKind::Join, buf: String::new() },
             KeyCode::Char('n') => self.mode = Mode::Input { kind: InputKind::Create, buf: String::new() },
-            KeyCode::Char('S') => self.mode = Mode::ConfirmStop,
+            KeyCode::Char('S') => {
+                self.mode = Mode::Confirm {
+                    prompt: "Stop the tetron daemon? This severs this UI's control socket.".into(),
+                    action: Action::Shutdown,
+                }
+            }
+            // Admin (slice C).
+            KeyCode::Char('a') => self.admin_add_sel(),
+            KeyCode::Char('K') => self.kick_sel(),
+            KeyCode::Char('L') => self.leave_sel(),
+            KeyCode::Char('X') => self.nuke_sel(),
             _ => {}
         }
     }
@@ -284,8 +307,103 @@ impl App {
         }
     }
 
+    // --- admin actions (slice C) ------------------------------------------
+
+    /// Grant the network key to the selected peer (admins only).
+    fn admin_add_sel(&mut self) {
+        let info = self
+            .cur_net()
+            .zip(self.cur_peer())
+            .map(|(n, p)| (n.is_admin(), n.name.clone(), p.key.clone(), p.hostname.clone()));
+        let Some((admin, network, peer, host)) = info else { return };
+        if !admin {
+            self.set_toast("admins only", true);
+            return;
+        }
+        self.mode = Mode::Confirm {
+            prompt: format!("Grant admin key to {host}? (makes it a co-coordinator)"),
+            action: Action::AdminAdd { network, peer },
+        };
+    }
+
+    /// Kick the selected peer from the network (admins only).
+    fn kick_sel(&mut self) {
+        let info = self.cur_net().zip(self.cur_peer()).and_then(|(n, p)| {
+            n.network_key.clone().map(|k| (n.is_admin(), k, p.key.clone(), p.hostname.clone()))
+        });
+        let Some((admin, nk, pid, host)) = info else {
+            self.set_toast("no network key", true);
+            return;
+        };
+        if !admin {
+            self.set_toast("admins only", true);
+            return;
+        }
+        self.mode = Mode::Confirm {
+            prompt: format!("Kick {host} from the network?"),
+            action: Action::Kick { network_key: nk, endpoint_id: pid },
+        };
+    }
+
+    /// Leave the selected network (any member).
+    fn leave_sel(&mut self) {
+        let Some(name) = self.cur_net().map(|n| n.name.clone()) else { return };
+        self.mode = Mode::Confirm {
+            prompt: format!("Leave network {name}?"),
+            action: Action::Leave { network: name },
+        };
+    }
+
+    /// Nuke the selected network, or second a pending proposal (admins only).
+    fn nuke_sel(&mut self) {
+        let info = self.cur_net().and_then(|n| {
+            n.network_key.clone().map(|k| {
+                (n.is_admin(), n.name.clone(), k, n.nuke_proposals.first().map(|(s, _)| s.clone()))
+            })
+        });
+        let Some((admin, name, nk, pending)) = info else {
+            self.set_toast("no network key", true);
+            return;
+        };
+        if !admin {
+            self.set_toast("admins only", true);
+            return;
+        }
+        let (prompt, second) = match pending {
+            Some(sid) => (
+                format!("SECOND the pending nuke of {name} (by {sid})? This DESTROYS the network."),
+                Some(sid),
+            ),
+            None => (
+                format!("NUKE {name}? This permanently destroys the network for every member."),
+                None,
+            ),
+        };
+        self.mode = Mode::Confirm { prompt, action: Action::Nuke { network_key: nk, second } };
+    }
+
     fn act(&self, a: Action) {
         let _ = self.action_tx.send(a);
+    }
+
+    /// Switch panes; fetch key-holders when entering the Admin tab.
+    fn set_tab(&mut self, t: Tab) {
+        self.tab = t;
+        self.maybe_fetch_admins();
+    }
+
+    /// Request the current network's key-holders if the Admin tab is showing
+    /// and we do not already have them for it.
+    fn maybe_fetch_admins(&mut self) {
+        if self.tab != Tab::Admin {
+            return;
+        }
+        let Some(name) = self.cur_net().map(|n| n.name.clone()) else { return };
+        if self.admins_req.as_deref() != Some(name.as_str()) {
+            self.admins_req = Some(name.clone());
+            self.admins = None;
+            self.act(Action::AdminList { network: name });
+        }
     }
 
     fn set_toast(&mut self, text: impl Into<String>, err: bool) {
@@ -297,7 +415,7 @@ impl App {
     fn cycle_tab(&mut self, d: i32) {
         let tabs = Tab::all();
         let i = tabs.iter().position(|t| *t == self.tab).unwrap_or(0);
-        self.tab = tabs[wrap(i, d, tabs.len())];
+        self.set_tab(tabs[wrap(i, d, tabs.len())]);
     }
 
     fn move_net(&mut self, d: i32) {
@@ -307,6 +425,7 @@ impl App {
         }
         self.sel_net = wrap(self.sel_net, d, n);
         self.sel_peer = 0;
+        self.maybe_fetch_admins();
     }
 
     fn move_peer(&mut self, d: i32) {

@@ -26,18 +26,27 @@ pub struct Snapshot {
 pub struct NetSnap {
     pub name: String,
     pub role: String,
+    /// The network's own key (needed to address Kick/Nuke). `None` on a daemon
+    /// predating the field.
+    pub network_key: Option<String>,
     pub my_ip: String,
     pub subnet: String,
     pub tun_name: String,
     pub member_count: usize,
     pub active: bool,
     pub peers: Vec<PeerSnap>,
+    /// Active, unexpired nuke proposals (short_id, proposed_at).
+    pub nuke_proposals: Vec<(String, u64)>,
 }
 
 impl NetSnap {
     /// Peers with a live connection right now.
     pub fn connected(&self) -> usize {
         self.peers.iter().filter(|p| p.conn.is_some()).count()
+    }
+    /// Whether the local node holds this network's key (coordinator/admin).
+    pub fn is_admin(&self) -> bool {
+        self.role == "admin"
     }
 }
 
@@ -88,11 +97,13 @@ pub fn map_status(msg: IpcMessage) -> Option<Snapshot> {
         .map(|n| NetSnap {
             name: n.network,
             role: n.role.to_string(),
+            network_key: n.network_key,
             my_ip: n.my_ip.to_string(),
             subnet: n.subnet,
             tun_name: n.tun_name,
             member_count: n.member_count,
             active: n.active,
+            nuke_proposals: n.nuke_proposals.into_iter().map(|p| (p.short_id, p.proposed_at)).collect(),
             peers: n
                 .peers
                 .into_iter()
