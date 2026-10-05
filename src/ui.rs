@@ -18,9 +18,13 @@ const C_ACCENT: Color = Color::Cyan;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let mut hits = Hits::default();
+    // The toolbar may need a second line in a narrow window; size the footer to
+    // fit so no button is clipped off-screen.
+    let buttons = toolbar_buttons(app);
+    let (fh, placements) = pack_toolbar(f.area().width, 2, &buttons);
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(fh)])
         .split(f.area());
 
     draw_statusbar(f, rows[0], app);
@@ -36,7 +40,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_main(f, body[1], app, &mut hits);
     }
 
-    draw_toolbar(f, rows[2], app, &mut hits);
+    draw_toolbar(f, rows[2], &placements, &mut hits);
 
     match &app.mode {
         Mode::Input { kind, buf } => draw_input(f, *kind, buf),
@@ -77,10 +81,9 @@ fn draw_statusbar(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// A clickable, colored button toolbar. Each button triggers the same action
-/// as its hotkey; its rect is recorded so a click dispatches it.
-fn draw_toolbar(f: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
-    let btns: Vec<(&str, Btn, Color)> = if app.snapshot.is_none() {
+/// The toolbar buttons for the current state (daemon up vs down).
+fn toolbar_buttons(app: &App) -> Vec<(&'static str, Btn, Color)> {
+    if app.snapshot.is_none() {
         vec![("start", Btn::Start, C_OK), ("help", Btn::Help, C_ACCENT), ("quit", Btn::Quit, C_DIM)]
     } else {
         vec![
@@ -95,24 +98,48 @@ fn draw_toolbar(f: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
             ("help", Btn::Help, C_DIM),
             ("quit", Btn::Quit, C_DIM),
         ]
-    };
-    let mut spans = Vec::new();
-    let mut x = area.x;
-    for (i, (label, btn, col)) in btns.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::raw(" "));
-            x += 1;
-        }
-        let text = format!(" {label} ");
-        let w = text.chars().count() as u16;
-        if x + w > area.x + area.width {
-            break;
-        }
-        hits.buttons.push((Rect { x, y: area.y, width: w, height: 1 }, *btn));
-        spans.push(Span::styled(text, Style::new().fg(Color::Black).bg(*col).bold()));
-        x += w;
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Greedily pack buttons into up to `max_lines` rows for the given width,
+/// wrapping when a button would overflow. Returns the number of lines used and
+/// each button's placement (line, x-offset, label, action, color).
+fn pack_toolbar(
+    width: u16,
+    max_lines: u16,
+    btns: &[(&'static str, Btn, Color)],
+) -> (u16, Vec<(u16, u16, &'static str, Btn, Color)>) {
+    let mut out = Vec::new();
+    let (mut line, mut x) = (0u16, 0u16);
+    for (label, btn, col) in btns {
+        let w = label.chars().count() as u16 + 2;
+        if x > 0 && x + w > width {
+            if line + 1 >= max_lines {
+                break; // out of room; remaining actions stay keyboard-only
+            }
+            line += 1;
+            x = 0;
+        }
+        out.push((line, x, *label, *btn, *col));
+        x += w + 1; // button plus a one-cell gap
+    }
+    (line + 1, out)
+}
+
+/// Render packed toolbar buttons and record their click rects.
+fn draw_toolbar(f: &mut Frame, area: Rect, placements: &[(u16, u16, &'static str, Btn, Color)], hits: &mut Hits) {
+    for (line, x, label, btn, col) in placements {
+        let w = label.chars().count() as u16 + 2;
+        let rect = Rect { x: area.x + x, y: area.y + line, width: w, height: 1 };
+        if rect.y >= area.y + area.height {
+            continue;
+        }
+        hits.buttons.push((rect, *btn));
+        f.render_widget(
+            Paragraph::new(Span::styled(format!(" {label} "), Style::new().fg(Color::Black).bg(*col).bold())),
+            rect,
+        );
+    }
 }
 
 fn draw_sidebar(f: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
