@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Sparkline, T
 use std::time::{SystemTime, UNIX_EPOCH};
 use tetron_proto::ipc::{ConnType, ViaDetail};
 
-use crate::app::{App, Hits, InputKind, Mode, Tab};
+use crate::app::{App, Btn, Hits, InputKind, Mode, Tab};
 use crate::model::{NetSnap, PeerSnap};
 
 const C_DIM: Color = Color::DarkGray;
@@ -36,7 +36,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_main(f, body[1], app, &mut hits);
     }
 
-    draw_hintbar(f, rows[2], app);
+    draw_toolbar(f, rows[2], app, &mut hits);
 
     match &app.mode {
         Mode::Input { kind, buf } => draw_input(f, *kind, buf),
@@ -69,21 +69,50 @@ fn draw_statusbar(f: &mut Frame, area: Rect, app: &App) {
     } else {
         spans.push(Span::styled("  daemon down", Style::new().fg(C_BAD)));
     }
+    // Transient toast, right here on the status bar so the toolbar stays put.
+    if let Some(t) = &app.toast {
+        let col = if t.err { C_BAD } else { C_OK };
+        spans.push(Span::styled(format!("   {} {}", if t.err { "✗" } else { "✓" }, t.text), Style::new().fg(col).bold()));
+    }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_hintbar(f: &mut Frame, area: Rect, app: &App) {
-    if let Some(t) = &app.toast {
-        let col = if t.err { C_BAD } else { C_OK };
-        let line = Line::from(vec![
-            Span::styled(if t.err { " ✗ " } else { " ✓ " }, Style::new().fg(Color::Black).bg(col).bold()),
-            Span::styled(format!(" {}", t.text), Style::new().fg(col)),
-        ]);
-        f.render_widget(Paragraph::new(line), area);
-        return;
+/// A clickable, colored button toolbar. Each button triggers the same action
+/// as its hotkey; its rect is recorded so a click dispatches it.
+fn draw_toolbar(f: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
+    let btns: Vec<(&str, Btn, Color)> = if app.snapshot.is_none() {
+        vec![("start", Btn::Start, C_OK), ("help", Btn::Help, C_ACCENT), ("quit", Btn::Quit, C_DIM)]
+    } else {
+        vec![
+            ("connect", Btn::Connect, C_OK),
+            ("standby", Btn::Standby, C_WARN),
+            ("ssh", Btn::Ssh, C_ACCENT),
+            ("copy ip", Btn::CopyIp, C_ACCENT),
+            ("invite", Btn::Invite, C_ACCENT),
+            ("new net", Btn::NewNet, C_ACCENT),
+            ("join", Btn::Join, C_ACCENT),
+            ("stop", Btn::Stop, C_BAD),
+            ("help", Btn::Help, C_DIM),
+            ("quit", Btn::Quit, C_DIM),
+        ]
+    };
+    let mut spans = Vec::new();
+    let mut x = area.x;
+    for (i, (label, btn, col)) in btns.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+            x += 1;
+        }
+        let text = format!(" {label} ");
+        let w = text.chars().count() as u16;
+        if x + w > area.x + area.width {
+            break;
+        }
+        hits.buttons.push((Rect { x, y: area.y, width: w, height: 1 }, *btn));
+        spans.push(Span::styled(text, Style::new().fg(Color::Black).bg(*col).bold()));
+        x += w;
     }
-    let hint = "q quit · ? help · ↵ ssh · y copy-ip · m mouse · c/d conn · i invite · n new · J join";
-    f.render_widget(Paragraph::new(Span::styled(hint, Style::new().fg(C_DIM))), area);
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_sidebar(f: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
@@ -402,8 +431,8 @@ fn draw_help(f: &mut Frame) {
         key("Tab 1-4", "switch pane (Peers/Transport/History/Admin)"),
         Line::raw(""),
         key("Enter", "ssh to the selected peer (overlay IP)"),
-        key("y", "copy selected peer IP to clipboard"),
-        key("m", "toggle mouse (off = drag to select text)"),
+        key("y", "copy selected peer IP (or the [copy ip] button)"),
+        key("m", "mouse off for native select (Shift+drag also works)"),
         Line::raw(""),
         key("c / d", "connect / standby selected network"),
         key("C / D", "connect / standby ALL networks"),

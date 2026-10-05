@@ -29,6 +29,24 @@ pub struct Hits {
     pub tabs: Vec<(Rect, Tab)>,
     /// Peer table rows, indexed by peer position within the current network.
     pub peers: Vec<Rect>,
+    /// Footer toolbar buttons and the action each triggers.
+    pub buttons: Vec<(Rect, Btn)>,
+}
+
+/// A footer toolbar button. Clicking it does the same as its hotkey.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Btn {
+    Quit,
+    Help,
+    Start,
+    Connect,
+    Standby,
+    Ssh,
+    CopyIp,
+    Invite,
+    NewNet,
+    Join,
+    Stop,
 }
 
 /// How many samples each history series retains (seconds at the 1s poll).
@@ -234,6 +252,11 @@ impl App {
     /// hit map. Targets are collected before mutating to satisfy the borrow
     /// checker.
     fn on_click(&mut self, col: u16, row: u16) {
+        let btn = self.hits.buttons.iter().find(|(r, _)| hit(r, col, row)).map(|(_, b)| *b);
+        if let Some(b) = btn {
+            self.do_button(b);
+            return;
+        }
         let tab = self.hits.tabs.iter().find(|(r, _)| hit(r, col, row)).map(|(_, t)| *t);
         if let Some(t) = tab {
             self.set_tab(t);
@@ -334,12 +357,7 @@ impl App {
                 self.act(Action::SetActive { network: None, active: false });
                 self.set_toast("standby all…", false);
             }
-            KeyCode::Char('i') => {
-                if let Some(name) = self.cur_net().map(|n| n.name.clone()) {
-                    self.act(Action::InviteCreate { network: name });
-                    self.set_toast("requesting invite…", false);
-                }
-            }
+            KeyCode::Char('i') => self.invite_sel(),
             KeyCode::Char('J') => self.mode = Mode::Input { kind: InputKind::Join, buf: String::new() },
             KeyCode::Char('n') => self.mode = Mode::Input { kind: InputKind::Create, buf: String::new() },
             KeyCode::Char('S') => {
@@ -484,6 +502,39 @@ impl App {
 
     fn act(&self, a: Action) {
         let _ = self.action_tx.send(a);
+    }
+
+    /// Request an invite for the selected network.
+    fn invite_sel(&mut self) {
+        if let Some(name) = self.cur_net().map(|n| n.name.clone()) {
+            self.act(Action::InviteCreate { network: name });
+            self.set_toast("requesting invite…", false);
+        }
+    }
+
+    /// Perform a footer-button action (shared with the hotkeys).
+    fn do_button(&mut self, b: Btn) {
+        match b {
+            Btn::Quit => self.should_quit = true,
+            Btn::Help => self.show_help = true,
+            Btn::Start => {
+                self.act(Action::StartDaemon);
+                self.set_toast("starting daemon…", false);
+            }
+            Btn::Connect => self.set_active_sel(true),
+            Btn::Standby => self.set_active_sel(false),
+            Btn::Ssh => self.ssh_sel(),
+            Btn::CopyIp => self.copy_sel_ip(),
+            Btn::Invite => self.invite_sel(),
+            Btn::NewNet => self.mode = Mode::Input { kind: InputKind::Create, buf: String::new() },
+            Btn::Join => self.mode = Mode::Input { kind: InputKind::Join, buf: String::new() },
+            Btn::Stop => {
+                self.mode = Mode::Confirm {
+                    prompt: "Stop the tetron daemon? This severs this UI's control socket.".into(),
+                    action: Action::Shutdown,
+                }
+            }
+        }
     }
 
     // --- selection / clipboard / ssh --------------------------------------
