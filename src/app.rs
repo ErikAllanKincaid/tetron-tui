@@ -5,13 +5,28 @@
 //! global), invite create (shown as text + QR), join by code, create network,
 //! and daemon stop/start. Text entry uses a modal input with bracketed paste.
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEventKind};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::layout::Rect;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::{Action, ActionResult};
 use crate::model::{ConnStatus, NetSnap, PeerHistory, PeerSnap, Snapshot};
+
+/// Clickable regions recorded by the render pass, consumed by mouse handling
+/// on the next event (layout is stable between a draw and the next input).
+#[derive(Default)]
+pub struct Hits {
+    /// Sidebar network rows, indexed by network position.
+    pub nets: Vec<Rect>,
+    /// Tab labels and the tab each selects.
+    pub tabs: Vec<(Rect, Tab)>,
+    /// Peer table rows, indexed by peer position within the current network.
+    pub peers: Vec<Rect>,
+}
 
 /// How many samples each history series retains (seconds at the 1s poll).
 const HISTORY_CAP: usize = 240;
@@ -77,6 +92,8 @@ pub struct App {
     pub admins: Option<(String, Vec<(String, bool)>)>,
     /// The network an AdminList is currently requested/cached for (dedupe).
     admins_req: Option<String>,
+    /// Clickable regions from the last render.
+    pub hits: Hits,
     action_tx: UnboundedSender<Action>,
 }
 
@@ -95,6 +112,7 @@ impl App {
             toast: None,
             admins: None,
             admins_req: None,
+            hits: Hits::default(),
             action_tx,
         }
     }
@@ -162,13 +180,59 @@ impl App {
                     buf.push_str(s.trim());
                 }
             }
-            Event::Mouse(m) if matches!(self.mode, Mode::Normal) && !self.show_help => match m.kind {
-                MouseEventKind::ScrollDown => self.move_peer(1),
-                MouseEventKind::ScrollUp => self.move_peer(-1),
-                _ => {}
-            },
+            Event::Mouse(m) => self.on_mouse(m),
             _ => {}
         }
+    }
+
+    fn on_mouse(&mut self, m: MouseEvent) {
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.show_help {
+                    self.show_help = false;
+                    return;
+                }
+                match self.mode {
+                    // A click dismisses the invite card; other modals need keys.
+                    Mode::Invite { .. } => self.mode = Mode::Normal,
+                    Mode::Normal => self.on_click(m.column, m.row),
+                    _ => {}
+                }
+            }
+            MouseEventKind::ScrollDown if self.interactive() => self.move_peer(1),
+            MouseEventKind::ScrollUp if self.interactive() => self.move_peer(-1),
+            _ => {}
+        }
+    }
+
+    /// Resolve a left-click to a tab, network, or peer via the last render's
+    /// hit map. Targets are collected before mutating to satisfy the borrow
+    /// checker.
+    fn on_click(&mut self, col: u16, row: u16) {
+        let tab = self.hits.tabs.iter().find(|(r, _)| hit(r, col, row)).map(|(_, t)| *t);
+        if let Some(t) = tab {
+            self.set_tab(t);
+            return;
+        }
+        let net = self.hits.nets.iter().position(|r| hit(r, col, row));
+        if let Some(i) = net {
+            if i < self.net_count() {
+                self.sel_net = i;
+                self.sel_peer = 0;
+                self.maybe_fetch_admins();
+            }
+            return;
+        }
+        let peer = self.hits.peers.iter().position(|r| hit(r, col, row));
+        if let Some(i) = peer {
+            if i < self.peer_count() {
+                self.sel_peer = i;
+            }
+        }
+    }
+
+    fn interactive(&self) -> bool {
+        matches!(self.mode, Mode::Normal) && !self.show_help
     }
 
     fn on_key(&mut self, k: KeyEvent) {
@@ -474,6 +538,11 @@ impl App {
 fn wrap(cur: usize, d: i32, n: usize) -> usize {
     let n = n as i32;
     (((cur as i32 + d) % n + n) % n) as usize
+}
+
+/// Point-in-rect test for a cell coordinate.
+fn hit(r: &Rect, col: u16, row: u16) -> bool {
+    col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
 }
 
 /// Render an invite code as a unicode half-block QR. Falls back to a note if

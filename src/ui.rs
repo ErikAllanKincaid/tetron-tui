@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Sparkline, T
 use std::time::{SystemTime, UNIX_EPOCH};
 use tetron_proto::ipc::{ConnType, ViaDetail};
 
-use crate::app::{App, InputKind, Mode, Tab};
+use crate::app::{App, Hits, InputKind, Mode, Tab};
 use crate::model::{NetSnap, PeerSnap};
 
 const C_DIM: Color = Color::DarkGray;
@@ -17,6 +17,7 @@ const C_BAD: Color = Color::Red;
 const C_ACCENT: Color = Color::Cyan;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    let mut hits = Hits::default();
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
@@ -31,8 +32,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(24), Constraint::Min(1)])
             .split(rows[1]);
-        draw_sidebar(f, body[0], app);
-        draw_main(f, body[1], app);
+        draw_sidebar(f, body[0], app, &mut hits);
+        draw_main(f, body[1], app, &mut hits);
     }
 
     draw_hintbar(f, rows[2], app);
@@ -47,6 +48,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             }
         }
     }
+
+    app.hits = hits;
 }
 
 fn draw_statusbar(f: &mut Frame, area: Rect, app: &App) {
@@ -83,7 +86,7 @@ fn draw_hintbar(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(Span::styled(hint, Style::new().fg(C_DIM))), area);
 }
 
-fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
+fn draw_sidebar(f: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
     let block = Block::default().borders(Borders::ALL).title(" Networks ");
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -91,6 +94,7 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
     let mut lines: Vec<Line> = Vec::new();
     if let Some(s) = &app.snapshot {
         for (i, net) in s.networks.iter().enumerate() {
+            hits.nets.push(Rect { x: inner.x, y: inner.y + i as u16, width: inner.width, height: 1 });
             let sel = i == app.sel_net;
             let marker = if sel { "▸ " } else { "  " };
             let (dot, dcol) = if net.active { ("●", C_OK) } else { ("○", C_DIM) };
@@ -114,7 +118,7 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn draw_main(f: &mut Frame, area: Rect, app: &App) {
+fn draw_main(f: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
     let Some(net) = app.cur_net() else {
         f.render_widget(Paragraph::new("no networks"), area);
         return;
@@ -126,10 +130,10 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
         .split(area);
 
     draw_net_header(f, rows[0], net);
-    draw_tabline(f, rows[1], app.tab);
+    draw_tabline(f, rows[1], app.tab, hits);
 
     match app.tab {
-        Tab::Peers => draw_peers(f, rows[2], net, app.sel_peer),
+        Tab::Peers => draw_peers(f, rows[2], net, app.sel_peer, hits),
         Tab::Transport => draw_transport(f, rows[2], app.cur_peer()),
         Tab::History => draw_history(f, rows[2], app),
         Tab::Admin => draw_admin(f, rows[2], net, app),
@@ -148,23 +152,36 @@ fn draw_net_header(f: &mut Frame, area: Rect, net: &NetSnap) {
     f.render_widget(Paragraph::new(vec![l1, l2]), area);
 }
 
-fn draw_tabline(f: &mut Frame, area: Rect, cur: Tab) {
+fn draw_tabline(f: &mut Frame, area: Rect, cur: Tab, hits: &mut Hits) {
     let mut spans = Vec::new();
+    let mut x = area.x;
     for (i, t) in Tab::all().iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(" | ", Style::new().fg(C_DIM)));
+            x += 3;
         }
+        let label = format!(" {} ", t.title());
+        let w = label.chars().count() as u16;
         let style = if *t == cur {
             Style::new().fg(Color::Black).bg(C_ACCENT).bold()
         } else {
             Style::new().fg(C_DIM)
         };
-        spans.push(Span::styled(format!(" {} ", t.title()), style));
+        hits.tabs.push((Rect { x, y: area.y, width: w, height: 1 }, *t));
+        x += w;
+        spans.push(Span::styled(label, style));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_peers(f: &mut Frame, area: Rect, net: &NetSnap, sel: usize) {
+fn draw_peers(f: &mut Frame, area: Rect, net: &NetSnap, sel: usize, hits: &mut Hits) {
+    // Header occupies the first row; peer i sits at area.y + 1 + i.
+    for i in 0..net.peers.len() {
+        let y = area.y + 1 + i as u16;
+        if y < area.y + area.height {
+            hits.peers.push(Rect { x: area.x, y, width: area.width, height: 1 });
+        }
+    }
     let header = Row::new(["", "host", "ip", "via", "rtt", "last"])
         .style(Style::new().fg(C_DIM).bold());
     let now = unix_now();
