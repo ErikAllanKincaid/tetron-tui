@@ -16,6 +16,9 @@ path = "src/main.rs"
 tetron-proto = { git = "https://github.com/ErikAllanKincaid/tetron", rev = "135a365" }
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "process"] }
 futures = "0.3"
 anyhow = "1"
+# Invite tickets as a scannable QR rendered with unicode half-blocks.
+# default features drop the `image`/`svg` renderers we do not use.
+qrcode = { version = "0.14", default-features = false }

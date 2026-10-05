@@ -1,14 +1,22 @@
-//! UI state and input handling. Slice A is read-only: input only moves the
-//! selection and switches tabs; nothing changes daemon state.
+//! UI state and input handling.
+//!
+//! Slice A was read-only. Slice B adds mutating actions, dispatched to the
+//! [`crate::action`] worker over a channel: Resume/Standby (per-network and
+//! global), invite create (shown as text + QR), join by code, create network,
+//! and daemon stop/start. Text entry uses a modal input with bracketed paste.
 
-use crossterm::event::{Event, KeyCode, KeyEventKind, MouseEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEventKind};
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc::UnboundedSender;
 
+use crate::action::{Action, ActionResult};
 use crate::model::{ConnStatus, NetSnap, PeerHistory, PeerSnap, Snapshot};
 
 /// How many samples each history series retains (seconds at the 1s poll).
 const HISTORY_CAP: usize = 240;
+/// How long a toast stays on screen.
+const TOAST_TTL: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -30,6 +38,26 @@ impl Tab {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum InputKind {
+    Join,
+    Create,
+}
+
+/// A modal overlay. `Normal` means the main view is interactive.
+pub enum Mode {
+    Normal,
+    Input { kind: InputKind, buf: String },
+    Invite { network: String, code: String, id: String, qr: String },
+    ConfirmStop,
+}
+
+pub struct Toast {
+    pub text: String,
+    pub err: bool,
+    at: Instant,
+}
+
 pub struct App {
     pub should_quit: bool,
     pub snapshot: Option<Snapshot>,
@@ -39,10 +67,13 @@ pub struct App {
     pub tab: Tab,
     pub show_help: bool,
     pub history: HashMap<String, PeerHistory>,
+    pub mode: Mode,
+    pub toast: Option<Toast>,
+    action_tx: UnboundedSender<Action>,
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(action_tx: UnboundedSender<Action>) -> Self {
         App {
             should_quit: false,
             snapshot: None,
@@ -52,10 +83,14 @@ impl App {
             tab: Tab::Peers,
             show_help: false,
             history: HashMap::new(),
+            mode: Mode::Normal,
+            toast: None,
+            action_tx,
         }
     }
 
-    /// Fold one client report into state.
+    // --- inbound updates ---------------------------------------------------
+
     pub fn on_status(&mut self, status: ConnStatus) {
         match status {
             ConnStatus::Up(snap) => {
@@ -72,7 +107,6 @@ impl App {
                         }
                     }
                 }
-                // Forget peers that are no longer connected anywhere.
                 self.history.retain(|k, _| seen.contains(k));
                 self.snapshot = Some(snap);
                 self.down_reason = None;
@@ -85,10 +119,37 @@ impl App {
         }
     }
 
+    pub fn on_action_result(&mut self, r: ActionResult) {
+        match r {
+            ActionResult::Ok(m) => self.set_toast(m, false),
+            ActionResult::Err(m) => self.set_toast(m, true),
+            ActionResult::Invite { network, code, id } => {
+                let qr = build_qr(&code);
+                self.mode = Mode::Invite { network, code, id, qr };
+            }
+        }
+    }
+
+    /// Drop an expired toast. Called from the render path each frame.
+    pub fn tick_toast(&mut self) {
+        if let Some(t) = &self.toast {
+            if t.at.elapsed() > TOAST_TTL {
+                self.toast = None;
+            }
+        }
+    }
+
+    // --- input -------------------------------------------------------------
+
     pub fn on_event(&mut self, ev: Event) {
         match ev {
-            Event::Key(k) if k.kind != KeyEventKind::Release => self.on_key(k.code),
-            Event::Mouse(m) => match m.kind {
+            Event::Key(k) if k.kind != KeyEventKind::Release => self.on_key(k),
+            Event::Paste(s) => {
+                if let Mode::Input { buf, .. } = &mut self.mode {
+                    buf.push_str(s.trim());
+                }
+            }
+            Event::Mouse(m) if matches!(self.mode, Mode::Normal) && !self.show_help => match m.kind {
                 MouseEventKind::ScrollDown => self.move_peer(1),
                 MouseEventKind::ScrollUp => self.move_peer(-1),
                 _ => {}
@@ -97,13 +158,51 @@ impl App {
         }
     }
 
-    fn on_key(&mut self, code: KeyCode) {
+    fn on_key(&mut self, k: KeyEvent) {
+        // Modal overlays consume input first.
+        match self.mode {
+            Mode::Input { .. } => return self.input_key(k),
+            Mode::Invite { .. } => {
+                if matches!(k.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) {
+                    self.mode = Mode::Normal;
+                }
+                return;
+            }
+            Mode::ConfirmStop => {
+                match k.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        self.act(Action::Shutdown);
+                        self.set_toast("stopping daemon…", false);
+                    }
+                    _ => {}
+                }
+                self.mode = Mode::Normal;
+                return;
+            }
+            Mode::Normal => {}
+        }
+
         if self.show_help {
-            // Any key closes help.
             self.show_help = false;
             return;
         }
-        match code {
+
+        // Daemon-down context: only quit / help / start.
+        if self.snapshot.is_none() {
+            match k.code {
+                KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+                KeyCode::Char('?') => self.show_help = true,
+                KeyCode::Char('s') => {
+                    self.act(Action::StartDaemon);
+                    self.set_toast("starting daemon…", false);
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Connected, normal navigation + actions.
+        match k.code {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             KeyCode::Char('?') => self.show_help = true,
             KeyCode::Tab => self.cycle_tab(1),
@@ -115,15 +214,90 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => self.move_peer(1),
             KeyCode::Left | KeyCode::Char('h') => self.move_net(-1),
             KeyCode::Right | KeyCode::Char('l') => self.move_net(1),
+            // Actions.
+            KeyCode::Char('c') => self.set_active_sel(true),
+            KeyCode::Char('d') => self.set_active_sel(false),
+            KeyCode::Char('C') => {
+                self.act(Action::SetActive { network: None, active: true });
+                self.set_toast("resuming all…", false);
+            }
+            KeyCode::Char('D') => {
+                self.act(Action::SetActive { network: None, active: false });
+                self.set_toast("standby all…", false);
+            }
+            KeyCode::Char('i') => {
+                if let Some(name) = self.cur_net().map(|n| n.name.clone()) {
+                    self.act(Action::InviteCreate { network: name });
+                    self.set_toast("requesting invite…", false);
+                }
+            }
+            KeyCode::Char('J') => self.mode = Mode::Input { kind: InputKind::Join, buf: String::new() },
+            KeyCode::Char('n') => self.mode = Mode::Input { kind: InputKind::Create, buf: String::new() },
+            KeyCode::Char('S') => self.mode = Mode::ConfirmStop,
             _ => {}
         }
     }
 
+    fn input_key(&mut self, k: KeyEvent) {
+        match k.code {
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                if let Mode::Input { kind, buf } = std::mem::replace(&mut self.mode, Mode::Normal) {
+                    let v = buf.trim().to_string();
+                    if v.is_empty() {
+                        return;
+                    }
+                    match kind {
+                        InputKind::Join => {
+                            self.act(Action::Join { code: v });
+                            self.set_toast("joining…", false);
+                        }
+                        InputKind::Create => {
+                            self.act(Action::Create { name: v });
+                            self.set_toast("creating…", false);
+                        }
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if let Mode::Input { buf, .. } = &mut self.mode {
+                    buf.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Mode::Input { buf, .. } = &mut self.mode {
+                    buf.push(c);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Resume/Standby the currently selected network.
+    fn set_active_sel(&mut self, active: bool) {
+        if let Some(name) = self.cur_net().map(|n| n.name.clone()) {
+            self.act(Action::SetActive { network: Some(name.clone()), active });
+            self.set_toast(
+                format!("{} {name}", if active { "resuming" } else { "standby" }),
+                false,
+            );
+        }
+    }
+
+    fn act(&self, a: Action) {
+        let _ = self.action_tx.send(a);
+    }
+
+    fn set_toast(&mut self, text: impl Into<String>, err: bool) {
+        self.toast = Some(Toast { text: text.into(), err, at: Instant::now() });
+    }
+
+    // --- selection ---------------------------------------------------------
+
     fn cycle_tab(&mut self, d: i32) {
         let tabs = Tab::all();
-        let i = tabs.iter().position(|t| *t == self.tab).unwrap_or(0) as i32;
-        let n = tabs.len() as i32;
-        self.tab = tabs[(((i + d) % n + n) % n) as usize];
+        let i = tabs.iter().position(|t| *t == self.tab).unwrap_or(0);
+        self.tab = tabs[wrap(i, d, tabs.len())];
     }
 
     fn move_net(&mut self, d: i32) {
@@ -181,4 +355,14 @@ impl App {
 fn wrap(cur: usize, d: i32, n: usize) -> usize {
     let n = n as i32;
     (((cur as i32 + d) % n + n) % n) as usize
+}
+
+/// Render an invite code as a unicode half-block QR. Falls back to a note if
+/// the data is too large to encode.
+fn build_qr(data: &str) -> String {
+    use qrcode::render::unicode;
+    match qrcode::QrCode::new(data.as_bytes()) {
+        Ok(code) => code.render::<unicode::Dense1x2>().quiet_zone(true).build(),
+        Err(_) => "(code too large for QR)".into(),
+    }
 }

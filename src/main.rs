@@ -4,13 +4,16 @@
 //! polls the daemon's `Status` once a second, rendered as a btop-style
 //! networks/peers/transport/history view. No actions change daemon state yet.
 
+mod action;
 mod app;
 mod ipc_client;
 mod model;
 mod ui;
 
 use anyhow::Result;
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture, EventStream};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, EventStream,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -22,6 +25,7 @@ use std::io::{self, Stdout};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+use action::{Action, ActionResult};
 use app::App;
 use model::ConnStatus;
 
@@ -38,33 +42,46 @@ async fn main() -> Result<()> {
 fn setup() -> Result<Term> {
     enable_raw_mode()?;
     let mut out = io::stdout();
-    execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(out, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
     Ok(Terminal::new(CrosstermBackend::new(out))?)
 }
 
 fn teardown(terminal: &mut Term) -> Result<()> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableBracketedPaste,
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
     Ok(())
 }
 
 async fn run(terminal: &mut Term) -> Result<()> {
-    let mut app = App::new();
-    let (tx, mut rx) = mpsc::channel::<ConnStatus>(8);
-    tokio::spawn(ipc_client::run(tx));
+    let (status_tx, mut status_rx) = mpsc::channel::<ConnStatus>(8);
+    let (act_tx, act_rx) = mpsc::unbounded_channel::<Action>();
+    let (res_tx, mut res_rx) = mpsc::unbounded_channel::<ActionResult>();
+    tokio::spawn(ipc_client::run(status_tx));
+    tokio::spawn(action::run(act_rx, res_tx));
 
+    let mut app = App::new(act_tx);
     let mut events = EventStream::new();
-    // A steady redraw cadence keeps relative times ("3m ago") fresh even when
-    // nothing else changes.
+    // A steady redraw cadence keeps relative times ("3m ago") and toast expiry
+    // fresh even when nothing else changes.
     let mut tick = tokio::time::interval(Duration::from_millis(500));
 
     terminal.draw(|f| ui::draw(f, &mut app))?;
     loop {
         tokio::select! {
-            status = rx.recv() => {
+            status = status_rx.recv() => {
                 if let Some(status) = status {
                     app.on_status(status);
+                }
+            }
+            result = res_rx.recv() => {
+                if let Some(result) = result {
+                    app.on_action_result(result);
                 }
             }
             ev = events.next() => {
@@ -74,6 +91,7 @@ async fn run(terminal: &mut Term) -> Result<()> {
             }
             _ = tick.tick() => {}
         }
+        app.tick_toast();
         if app.should_quit {
             break;
         }

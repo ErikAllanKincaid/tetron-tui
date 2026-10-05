@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Sparkline, T
 use std::time::{SystemTime, UNIX_EPOCH};
 use tetron_proto::ipc::{ConnType, ViaDetail};
 
-use crate::app::{App, Tab};
+use crate::app::{App, InputKind, Mode, Tab};
 use crate::model::{NetSnap, PeerSnap};
 
 const C_DIM: Color = Color::DarkGray;
@@ -35,10 +35,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_main(f, body[1], app);
     }
 
-    draw_hintbar(f, rows[2]);
+    draw_hintbar(f, rows[2], app);
 
-    if app.show_help {
-        draw_help(f, f.area());
+    match &app.mode {
+        Mode::Input { kind, buf } => draw_input(f, *kind, buf),
+        Mode::Invite { network, code, id, qr } => draw_invite(f, network, code, id, qr),
+        Mode::ConfirmStop => draw_confirm(f),
+        Mode::Normal => {
+            if app.show_help {
+                draw_help(f);
+            }
+        }
     }
 }
 
@@ -62,8 +69,17 @@ fn draw_statusbar(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_hintbar(f: &mut Frame, area: Rect) {
-    let hint = "q quit · ? help · Tab pane · ←→ net · ↑↓ peer · refresh 1s";
+fn draw_hintbar(f: &mut Frame, area: Rect, app: &App) {
+    if let Some(t) = &app.toast {
+        let col = if t.err { C_BAD } else { C_OK };
+        let line = Line::from(vec![
+            Span::styled(if t.err { " ✗ " } else { " ✓ " }, Style::new().fg(Color::Black).bg(col).bold()),
+            Span::styled(format!(" {}", t.text), Style::new().fg(col)),
+        ]);
+        f.render_widget(Paragraph::new(line), area);
+        return;
+    }
+    let hint = "q quit · ? help · Tab pane · ←→ net · ↑↓ peer · c/d conn · i invite · n new · J join · S stop";
     f.render_widget(Paragraph::new(Span::styled(hint, Style::new().fg(C_DIM))), area);
 }
 
@@ -92,7 +108,9 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
         }
     }
     lines.push(Line::raw(""));
-    lines.push(Line::styled("  read-only (slice A)", Style::new().fg(C_DIM).italic()));
+    lines.push(Line::styled("  c connect   d standby", Style::new().fg(C_DIM)));
+    lines.push(Line::styled("  C/D all     i invite", Style::new().fg(C_DIM)));
+    lines.push(Line::styled("  n new net   J join", Style::new().fg(C_DIM)));
     f.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -321,7 +339,9 @@ fn draw_down(f: &mut Frame, area: Rect, app: &App) {
         Line::styled(reason, Style::new().fg(C_DIM)),
         Line::raw(""),
         Line::from(vec![
-            Span::styled("start it with:  ", Style::new().fg(C_DIM)),
+            Span::styled("press ", Style::new().fg(C_DIM)),
+            Span::styled("s", Style::new().fg(C_ACCENT).bold()),
+            Span::styled(" to run: ", Style::new().fg(C_DIM)),
             Span::styled("systemctl start tetron.service", Style::new().fg(C_ACCENT)),
         ]),
         Line::raw(""),
@@ -331,25 +351,116 @@ fn draw_down(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(p, centered(area, 60, 11));
 }
 
-fn draw_help(f: &mut Frame, area: Rect) {
+fn draw_help(f: &mut Frame) {
+    let key = |k: &'static str, d: &'static str| {
+        Line::from(vec![
+            Span::styled(format!("  {k:<12}"), Style::new().fg(C_ACCENT)),
+            Span::styled(d, Style::new()),
+        ])
+    };
     let lines = vec![
         Line::styled(" tetron-tui — keys ", Style::new().fg(C_ACCENT).bold()),
         Line::raw(""),
-        Line::raw("  ↑/↓  or j/k   select peer"),
-        Line::raw("  ←/→  or h/l   select network"),
-        Line::raw("  Tab           cycle pane"),
-        Line::raw("  1 2 3         Peers / Transport / History"),
-        Line::raw("  ?             this help"),
-        Line::raw("  q / Esc       quit"),
+        key("↑/↓ j/k", "select peer"),
+        key("←/→ h/l", "select network"),
+        key("Tab 1 2 3", "switch pane"),
         Line::raw(""),
-        Line::styled("  read-only (slice A). actions land in slice B.", Style::new().fg(C_DIM).italic()),
+        key("c / d", "connect / standby selected network"),
+        key("C / D", "connect / standby ALL networks"),
+        key("i", "create invite (shows code + QR)"),
+        key("n", "new network"),
+        key("J", "join by invite code"),
+        key("S", "stop daemon  ·  s: start (when down)"),
+        Line::raw(""),
+        key("? ", "this help      q / Esc  quit"),
         Line::raw(""),
         Line::styled("  press any key to close", Style::new().fg(C_DIM)),
     ];
-    let area = centered(area, 50, lines.len() as u16 + 2);
+    let n = lines.len() as u16 + 2;
+    let area = centered(f.area(), 56, n);
     f.render_widget(Clear, area);
     f.render_widget(
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL)),
+        area,
+    );
+}
+
+fn draw_input(f: &mut Frame, kind: InputKind, buf: &str) {
+    let (title, hint) = match kind {
+        InputKind::Join => (" Join by invite code ", "paste the code, then Enter"),
+        InputKind::Create => (" New network ", "type a name, then Enter"),
+    };
+    let area = centered(f.area(), 64, 6);
+    f.render_widget(Clear, area);
+    let block = Block::default().borders(Borders::ALL).title(title).title_style(Style::new().fg(C_ACCENT).bold());
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1)])
+        .split(inner);
+    // Field (truncated from the left so the caret end stays visible).
+    let shown = tail(buf, rows[0].width.saturating_sub(2) as usize);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled("> ", Style::new().fg(C_ACCENT)), Span::raw(shown.clone())])),
+        rows[0],
+    );
+    f.render_widget(Paragraph::new(Span::styled(hint, Style::new().fg(C_DIM))), rows[2]);
+    let cx = rows[0].x + 2 + shown.chars().count() as u16;
+    f.set_cursor_position((cx.min(rows[0].x + rows[0].width.saturating_sub(1)), rows[0].y));
+}
+
+fn draw_invite(f: &mut Frame, network: &str, code: &str, id: &str, qr: &str) {
+    let qr_w = qr.lines().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
+    let qr_h = qr.lines().count() as u16;
+    let w = qr_w.max(44).min(f.area().width.saturating_sub(2)) + 4;
+    let h = qr_h + 7;
+    let area = centered(f.area(), w, h);
+    f.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Invite · {network} "))
+        .title_style(Style::new().fg(C_ACCENT).bold());
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("code  ", Style::new().fg(C_DIM)),
+            Span::styled(code.to_string(), Style::new().fg(C_OK).bold()),
+        ]),
+        Line::from(vec![
+            Span::styled("id    ", Style::new().fg(C_DIM)),
+            Span::raw(id.to_string()),
+        ]),
+        Line::raw(""),
+    ];
+    for l in qr.lines() {
+        lines.push(Line::raw(l.to_string()));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::styled("scan the QR or copy the code · Esc to close", Style::new().fg(C_DIM)));
+    f.render_widget(Paragraph::new(lines).alignment(Alignment::Center).wrap(Wrap { trim: false }), inner);
+}
+
+fn draw_confirm(f: &mut Frame) {
+    let area = centered(f.area(), 54, 7);
+    f.render_widget(Clear, area);
+    let lines = vec![
+        Line::raw(""),
+        Line::styled("Stop the tetron daemon?", Style::new().fg(C_BAD).bold()),
+        Line::styled("This severs this UI's control socket.", Style::new().fg(C_DIM)),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("y", Style::new().fg(C_ACCENT).bold()),
+            Span::styled(" stop    ", Style::new().fg(C_DIM)),
+            Span::styled("n/Esc", Style::new().fg(C_ACCENT).bold()),
+            Span::styled(" cancel", Style::new().fg(C_DIM)),
+        ]),
+    ];
+    f.render_widget(
+        Paragraph::new(lines).alignment(Alignment::Center).block(Block::default().borders(Borders::ALL)),
         area,
     );
 }
@@ -458,6 +569,16 @@ fn trunc(s: &str, max: usize) -> String {
         let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
         out.push('…');
         out
+    }
+}
+
+/// Keep the last `max` chars (so a long input stays caret-visible).
+fn tail(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    if n <= max {
+        s.to_string()
+    } else {
+        s.chars().skip(n - max).collect()
     }
 }
 
