@@ -163,7 +163,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
     draw_tabline(f, rows[1], app.tab, hits);
 
     match app.tab {
-        Tab::Peers => draw_peers(f, rows[2], net, app.sel_peer, hits),
+        Tab::Peers => draw_peers(f, rows[2], net, app.sel_peer, &app.peer_scroll, hits),
         Tab::Transport => draw_transport(f, rows[2], app.cur_peer()),
         Tab::History => draw_history(f, rows[2], app),
         Tab::Admin => draw_admin(f, rows[2], net, app),
@@ -204,14 +204,34 @@ fn draw_tabline(f: &mut Frame, area: Rect, cur: Tab, hits: &mut Hits) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_peers(f: &mut Frame, area: Rect, net: &NetSnap, sel: usize, hits: &mut Hits) {
-    // Header occupies the first row; peer i sits at area.y + 1 + i.
-    for i in 0..net.peers.len() {
-        let y = area.y + 1 + i as u16;
-        if y < area.y + area.height {
-            hits.peers.push(Rect { x: area.x, y, width: area.width, height: 1 });
-        }
+fn draw_peers(f: &mut Frame, area: Rect, net: &NetSnap, sel: usize, scroll: &std::cell::Cell<usize>, hits: &mut Hits) {
+    let n = net.peers.len();
+    // When the list is taller than the area, reserve the last line for a
+    // scroll-position status, so the table shows one fewer row.
+    let overflow = n > area.height.saturating_sub(1) as usize;
+    let table_area = if overflow {
+        Rect { height: area.height.saturating_sub(1), ..area }
+    } else {
+        area
+    };
+    // Rows available below the single header line.
+    let vis = table_area.height.saturating_sub(1) as usize;
+    // Keep the selected peer in view, then clamp so we never scroll past the end.
+    let mut off = scroll.get();
+    if sel < off {
+        off = sel;
+    } else if vis > 0 && sel >= off + vis {
+        off = sel + 1 - vis;
     }
+    off = off.min(n.saturating_sub(vis.max(1)));
+    scroll.set(off);
+    let end = if vis == 0 { off } else { (off + vis).min(n) };
+
+    // Hit rects for the visible slice (header at table_area.y; peer at +1+j).
+    for (j, i) in (off..end).enumerate() {
+        hits.peers.push((Rect { x: table_area.x, y: table_area.y + 1 + j as u16, width: table_area.width, height: 1 }, i));
+    }
+
     let header = Row::new(["", "host", "ip", "via", "rtt", "last"])
         .style(Style::new().fg(C_DIM).bold());
     let now = unix_now();
@@ -219,6 +239,8 @@ fn draw_peers(f: &mut Frame, area: Rect, net: &NetSnap, sel: usize, hits: &mut H
         .peers
         .iter()
         .enumerate()
+        .skip(off)
+        .take(end - off)
         .map(|(i, p)| {
             let (mark, mcol) = peer_marker(p);
             let (via, vcol) = match &p.conn {
@@ -252,7 +274,22 @@ fn draw_peers(f: &mut Frame, area: Rect, net: &NetSnap, sel: usize, hits: &mut H
         Constraint::Length(6),
     ];
     let table = Table::new(rows, widths).header(header).column_spacing(1);
-    f.render_widget(table, area);
+    f.render_widget(table, table_area);
+
+    if overflow {
+        let y = area.y + area.height - 1;
+        let status = format!(
+            "  {}▲ above · {}▼ below · {}/{}  (↑↓/wheel to scroll)",
+            off,
+            n - end,
+            sel + 1,
+            n
+        );
+        f.render_widget(
+            Paragraph::new(Span::styled(status, Style::new().fg(C_ACCENT))),
+            Rect { x: area.x, y, width: area.width, height: 1 },
+        );
+    }
 }
 
 fn draw_transport(f: &mut Frame, area: Rect, peer: Option<&PeerSnap>) {

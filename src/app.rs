@@ -11,6 +11,7 @@ use crossterm::event::{
 };
 use crossterm::execute;
 use ratatui::layout::Rect;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -27,8 +28,9 @@ pub struct Hits {
     pub nets: Vec<Rect>,
     /// Tab labels and the tab each selects.
     pub tabs: Vec<(Rect, Tab)>,
-    /// Peer table rows, indexed by peer position within the current network.
-    pub peers: Vec<Rect>,
+    /// Visible peer rows as (rect, peer index) — the index is absolute within
+    /// the network, since the list scrolls.
+    pub peers: Vec<(Rect, usize)>,
     /// Footer toolbar buttons and the action each triggers.
     pub buttons: Vec<(Rect, Btn)>,
 }
@@ -124,6 +126,9 @@ pub struct App {
     /// An SSH target (overlay IP) the main loop should connect to, suspending
     /// the TUI for the session.
     pub ssh_target: Option<String>,
+    /// Top visible peer index for the (scrolling) Peers table. A `Cell` so the
+    /// render pass can keep the selected peer in view each frame.
+    pub peer_scroll: Cell<usize>,
     action_tx: UnboundedSender<Action>,
 }
 
@@ -146,6 +151,7 @@ impl App {
             mouse_on: true,
             user_picked: false,
             ssh_target: None,
+            peer_scroll: Cell::new(0),
             action_tx,
         }
     }
@@ -271,7 +277,7 @@ impl App {
             }
             return;
         }
-        let peer = self.hits.peers.iter().position(|r| hit(r, col, row));
+        let peer = self.hits.peers.iter().find(|(r, _)| hit(r, col, row)).map(|(_, i)| *i);
         if let Some(i) = peer {
             if i < self.peer_count() {
                 self.user_picked = true;
