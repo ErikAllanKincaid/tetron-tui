@@ -33,6 +33,20 @@ type Term = Terminal<CrosstermBackend<Stdout>>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Handle version flags before touching the terminal. The suite installer
+    // (install-tetron-suite.sh) probes every component with `<bin> --version`
+    // / `<bin> version` to read its installed version; without this, those
+    // invocations would ignore the arg and launch the full interactive TUI,
+    // taking over the installer's terminal. Output shape matches clap's
+    // `<bin> <version>` so the installer's `awk '{print $2}'` parses it.
+    if std::env::args()
+        .skip(1)
+        .any(|a| a == "--version" || a == "-V" || a == "version")
+    {
+        println!("tetron-tui {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     let mut terminal = setup()?;
     let res = run(&mut terminal).await;
     teardown(&mut terminal)?;
