@@ -275,13 +275,16 @@ fn draw_peers(f: &mut Frame, area: Rect, net: &NetSnap, sel: usize, scroll: &std
                 None => ("--", C_DIM),
             };
             let rtt = p.conn.as_ref().and_then(|c| c.rtt_ms);
+            // The selected row has a fixed dark background, so its default and
+            // dim text must be light too (see `on_selected`).
+            let fg = |c: Color| if i == sel { on_selected(c) } else { c };
             let r = Row::new([
-                Cellish(mark.to_string(), mcol),
-                Cellish(trunc(&p.hostname, 12), Color::Reset),
-                Cellish(p.ip.clone(), C_DIM),
-                Cellish(via.to_string(), vcol),
-                Cellish(fmt_rtt(rtt), color_rtt(rtt)),
-                Cellish(fmt_ago(p.last_seen, now), C_DIM),
+                Cellish(mark.to_string(), fg(mcol)),
+                Cellish(trunc(&p.hostname, 12), fg(Color::Reset)),
+                Cellish(p.ip.clone(), fg(C_DIM)),
+                Cellish(via.to_string(), fg(vcol)),
+                Cellish(fmt_rtt(rtt), fg(color_rtt(rtt))),
+                Cellish(fmt_ago(p.last_seen, now), fg(C_DIM)),
             ]
             .map(Cell::from));
             if i == sel {
@@ -671,8 +674,25 @@ impl From<Cellish> for Cell<'static> {
     }
 }
 
+/// Background of the selected table row: a fixed dark grey, the same in every
+/// terminal theme.
+const SEL_BG: Color = Color::Rgb(40, 44, 52);
+
 fn row_selected(r: Row<'static>) -> Row<'static> {
-    r.style(Style::new().bg(Color::Rgb(40, 44, 52)))
+    r.style(Style::new().bg(SEL_BG))
+}
+
+/// Text colour for a cell on the selected row. [`SEL_BG`] is always dark, but
+/// the terminal default foreground is near-black in a light theme and
+/// `DarkGray` can be too, so those two become explicit light RGB values (RGB,
+/// not ANSI white, which a light theme may remap to a dark colour). Status
+/// colours (green, yellow, red, cyan) read fine on the dark bar and are kept.
+fn on_selected(c: Color) -> Color {
+    match c {
+        Color::Reset => Color::Rgb(220, 223, 228),
+        C_DIM => Color::Rgb(150, 156, 166),
+        c => c,
+    }
 }
 
 fn peer_marker(p: &PeerSnap) -> (&'static str, Color) {
