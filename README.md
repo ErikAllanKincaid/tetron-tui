@@ -2,6 +2,10 @@
 
 An interactive terminal UI for the [tetron](https://github.com/ErikAllanKincaid/tetron) P2P mesh VPN. Standalone, keyboard-first and mouse-capable, truecolor, and usable at the local console or over plain SSH, with or without a desktop. It talks to the local tetron daemon over its Unix control socket (`tetron-proto`), so it needs a running daemon on the same host.
 
+<p align="center">
+  <img src="assets/tetron-tui.png" alt="tetron-tui: networks on the left, peers with direct or relay path and round-trip time on the right, key hints along the bottom" width="800">
+</p>
+
 ## What it shows and does
 
 - Live network and peer status, auto-refreshed.
