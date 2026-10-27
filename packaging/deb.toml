@@ -1,0 +1,19 @@
+# Package description for mkdeb (https://github.com/ErikAllanKincaid/tetron-packaging).
+# Built in release CI by the build-deb action. Spec: spec/packaging.py (DEB-001..006).
+name = "tetron-tui"
+description = "Interactive terminal UI for the tetron mesh VPN"
+long_description = """
+Terminal dashboard for the tetron daemon: networks, peers, transport and
+history, with mouse support. Talks to the local tetron daemon over its Unix
+socket, so the tetron daemon must be installed and running on the same host."""
+section = "net"
+license = "MPL-2.0"
+homepage = "https://github.com/ErikAllanKincaid/tetron-tui"
+# tetron-tui X.Y.z targets tetron core X.Y (suite version policy), so recommend that minor only.
+recommends = ["tetron (>= {minor}), tetron (<< {next_minor})"]
+smoke = "tetron-tui --version"
+
+[[files]]
+src = "binary"
+dst = "usr/bin/tetron-tui"
+mode = "0755"
