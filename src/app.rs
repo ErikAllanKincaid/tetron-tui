@@ -438,14 +438,14 @@ impl App {
         let info = self
             .cur_net()
             .zip(self.cur_peer())
-            .map(|(n, p)| (n.is_admin(), n.name.clone(), p.key.clone(), p.hostname.clone()));
-        let Some((admin, network, peer, host)) = info else { return };
+            .map(|(n, p)| (n.is_admin(), n.name.clone(), p.key.clone(), p.label()));
+        let Some((admin, network, peer, who)) = info else { return };
         if !admin {
             self.set_toast("admins only", true);
             return;
         }
         self.mode = Mode::Confirm {
-            prompt: format!("Grant admin key to {host}? (makes it a co-coordinator)"),
+            prompt: format!("Grant the {network} admin key to {who}? (makes it a co-coordinator)"),
             action: Action::AdminAdd { network, peer },
         };
     }
@@ -453,9 +453,9 @@ impl App {
     /// Kick the selected peer from the network (admins only).
     fn kick_sel(&mut self) {
         let info = self.cur_net().zip(self.cur_peer()).and_then(|(n, p)| {
-            n.network_key.clone().map(|k| (n.is_admin(), k, p.key.clone(), p.hostname.clone()))
+            n.network_key.clone().map(|k| (n.is_admin(), k, p.key.clone(), p.label(), n.name.clone()))
         });
-        let Some((admin, nk, pid, host)) = info else {
+        let Some((admin, nk, pid, who, network)) = info else {
             self.set_toast("no network key", true);
             return;
         };
@@ -464,7 +464,7 @@ impl App {
             return;
         }
         self.mode = Mode::Confirm {
-            prompt: format!("Kick {host} from the network?"),
+            prompt: format!("Kick {who} from {network}?"),
             action: Action::Kick { network_key: nk, endpoint_id: pid },
         };
     }

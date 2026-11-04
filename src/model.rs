@@ -63,6 +63,14 @@ pub struct PeerSnap {
     pub conn: Option<ConnSnap>,
 }
 
+impl PeerSnap {
+    /// "hostname  ip  key8": who an action hits (TUI-PEER-001).
+    pub fn label(&self) -> String {
+        let short: String = self.key.chars().take(8).collect();
+        format!("{}  {}  {short}", self.hostname, self.ip)
+    }
+}
+
 #[derive(Clone)]
 pub struct ConnSnap {
     pub conn_type: ConnType,
@@ -180,5 +188,33 @@ fn push_capped(q: &mut VecDeque<u64>, v: u64, cap: usize) {
     q.push_back(v);
     while q.len() > cap {
         q.pop_front();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn peer(key: &str, host: &str, ip: &str) -> PeerSnap {
+        PeerSnap {
+            key: key.into(),
+            hostname: host.into(),
+            ip: ip.into(),
+            is_coordinator: false,
+            last_seen: None,
+            conn: None,
+        }
+    }
+
+    // TUI-PEER-001
+    #[test]
+    fn peer_label_names_host_ip_and_short_key() {
+        let p = peer("7f3a9c21e0b4d5aa", "builder", "10.42.0.7");
+        assert_eq!(p.label(), "builder  10.42.0.7  7f3a9c21");
+    }
+
+    #[test]
+    fn peer_label_keeps_a_short_key_whole() {
+        assert_eq!(peer("ab12", "x", "10.0.0.2").label(), "x  10.0.0.2  ab12");
     }
 }

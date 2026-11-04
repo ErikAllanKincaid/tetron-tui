@@ -192,9 +192,34 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
     match app.tab {
         Tab::Peers => draw_peers(f, rows[2], net, app.sel_peer, &app.peer_scroll, hits),
         Tab::Transport => draw_transport(f, rows[2], app.cur_peer()),
-        Tab::History => draw_history(f, rows[2], app),
-        Tab::Admin => draw_admin(f, rows[2], net, app),
+        Tab::History => {
+            let rest = below_sel_peer(f, rows[2], app);
+            draw_history(f, rest, app)
+        }
+        Tab::Admin => {
+            let rest = below_sel_peer(f, rows[2], app);
+            draw_admin(f, rest, net, app)
+        }
     }
+}
+
+/// Draw the selected peer on the first line of `area` and return the rest
+/// (TUI-PEER-001: History and Admin show whom they refer to).
+fn below_sel_peer(f: &mut Frame, area: Rect, app: &App) -> Rect {
+    let parts = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1)])
+        .split(area);
+    let line = match app.cur_peer() {
+        Some(p) => Line::from(vec![
+            Span::styled("peer  ", Style::new().fg(C_DIM)),
+            Span::styled(p.label(), Style::new().fg(C_ACCENT).bold()),
+            Span::styled("   (j/k to pick)", Style::new().fg(C_DIM)),
+        ]),
+        None => Line::styled("no peer selected", Style::new().fg(C_DIM)),
+    };
+    f.render_widget(Paragraph::new(line), parts[0]);
+    parts[2]
 }
 
 fn draw_net_header(f: &mut Frame, area: Rect, net: &NetSnap) {
