@@ -15,6 +15,11 @@ pub enum Action {
     InviteCreate { network: String },
     /// Join a network from an invite code (decoded client-side).
     Join { code: String },
+    /// Read the invite from a file, then join (TUI-JOIN-FILE-001).
+    JoinFile { path: std::path::PathBuf },
+    /// Fetch the invite from a URL with curl, then join (TUI-JOIN-URL-001).
+    /// `allow_http` is the user's consent to plain http://.
+    JoinUrl { url: String, allow_http: bool },
     /// Create a new network with the given display name.
     Create { name: String },
     /// Gracefully stop the daemon (severs our own socket).
@@ -89,26 +94,17 @@ async fn exec(a: Action) -> ActionResult {
             }
         }
 
-        Action::Join { code } => {
-            let (key, secret) = match invite::decode_invite_code(code.trim()) {
-                Ok(v) => v,
-                Err(e) => return ActionResult::Err(format!("bad invite code: {e}")),
-            };
-            let msg = IpcMessage::Join {
-                network_key: key.to_string(),
-                alias: None,
-                hostname: None,
-                transport: None,
-                invite: Some(secret),
-                force: false,
-            };
-            match round_trip(msg).await {
-                Ok(IpcMessage::Joined { network, .. }) => ActionResult::Ok(format!("joined {network}")),
-                Ok(IpcMessage::Error { message }) => ActionResult::Err(message),
-                Ok(_) => ActionResult::Err("unexpected reply to join".into()),
-                Err(e) => ActionResult::Err(e),
-            }
-        }
+        Action::Join { code } => join(&code).await,
+
+        Action::JoinFile { path } => match crate::join_input::read_file(&path) {
+            Ok(code) => join(&code).await,
+            Err(e) => ActionResult::Err(e),
+        },
+
+        Action::JoinUrl { url, allow_http } => match crate::join_input::fetch(&url, allow_http).await {
+            Ok(code) => join(&code).await,
+            Err(e) => ActionResult::Err(e),
+        },
 
         Action::Create { name } => {
             let msg = IpcMessage::Create {
@@ -163,6 +159,28 @@ async fn exec(a: Action) -> ActionResult {
         Action::Leave { network } => {
             simple(IpcMessage::Leave { network, force: false }, "left network").await
         }
+    }
+}
+
+/// Decode a pasted, read or fetched invite and send IPC Join.
+async fn join(code: &str) -> ActionResult {
+    let (key, secret) = match invite::decode_invite_code(code.trim()) {
+        Ok(v) => v,
+        Err(e) => return ActionResult::Err(format!("bad invite code: {e}")),
+    };
+    let msg = IpcMessage::Join {
+        network_key: key.to_string(),
+        alias: None,
+        hostname: None,
+        transport: None,
+        invite: Some(secret),
+        force: false,
+    };
+    match round_trip(msg).await {
+        Ok(IpcMessage::Joined { network, .. }) => ActionResult::Ok(format!("joined {network}")),
+        Ok(IpcMessage::Error { message }) => ActionResult::Err(message),
+        Ok(_) => ActionResult::Err("unexpected reply to join".into()),
+        Err(e) => ActionResult::Err(e),
     }
 }
 
