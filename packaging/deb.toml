@@ -1,5 +1,5 @@
 # Package description for mkdeb (https://github.com/ErikAllanKincaid/tetron-packaging).
-# Built in release CI by the build-deb action. Spec: spec/packaging.py (DEB-001..006).
+# Built in release CI by the build-deb action. Spec: spec/packaging.py (DEB-001..007).
 name = "tetron-tui"
 description = "Interactive terminal UI for the tetron mesh VPN"
 long_description = """
@@ -11,6 +11,8 @@ license = "MPL-2.0"
 homepage = "https://github.com/ErikAllanKincaid/tetron-tui"
 # tetron-tui X.Y.z targets tetron core X.Y (suite version policy), so recommend that minor only.
 recommends = ["tetron (>= {minor}), tetron (<< {next_minor})"]
+# DEB-007: curl fetches invite URLs (join by URL).
+depends = ["curl"]
 smoke = "tetron-tui --version"
 
 [[files]]
