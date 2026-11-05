@@ -1,6 +1,6 @@
 [package]
 name = "tetron-tui"
-version = "0.15.0"
+version = "0.15.1"
 edition = "2024"
 rust-version = "1.91"
 description = "Interactive terminal UI for the tetron P2P mesh VPN"
@@ -11,8 +11,8 @@ name = "tetron-tui"
 path = "src/main.rs"
 
 [dependencies]
-# Pinned to the daemon's wire protocol (v0.15.0). Bump the rev in lockstep
-# with the deployed daemon so the msgpack schema always matches.
+# Pinned to a core release tag so the msgpack schema matches the daemon.
+# Bump with contrib/bump-proto.sh.
 tetron-proto = { git = "https://github.com/ErikAllanKincaid/tetron", tag = "v0.15.2" }
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
