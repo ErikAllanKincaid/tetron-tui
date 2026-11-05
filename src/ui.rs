@@ -668,7 +668,7 @@ fn draw_admin(f: &mut Frame, area: Rect, net: &NetSnap, app: &App) {
                 let name = admin_name(net, sid, *is_self);
                 lines.push(Line::from(vec![
                     Span::styled("  ● ", Style::new().fg(C_ACCENT)),
-                    Span::styled(format!("{:<16}", trunc(&name, 16)), Style::new()),
+                    Span::styled(format!("{:<16}  ", trunc(&name, 16)), Style::new()),
                     Span::styled(sid.clone(), Style::new().fg(C_DIM)),
                     Span::styled(if *is_self { "  (you)" } else { "" }, Style::new().fg(C_DIM)),
                 ]));
