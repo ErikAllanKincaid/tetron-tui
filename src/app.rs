@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::action::{Action, ActionResult};
+use crate::join_input::JoinInput;
 use crate::model::{ConnStatus, NetSnap, PeerHistory, PeerSnap, Snapshot};
 
 /// Clickable regions recorded by the render pass, consumed by mouse handling
@@ -395,10 +396,7 @@ impl App {
                         return;
                     }
                     match kind {
-                        InputKind::Join => {
-                            self.act(Action::Join { code: v });
-                            self.set_toast("joining…", false);
-                        }
+                        InputKind::Join => self.join_input(&v),
                         InputKind::Create => {
                             self.act(Action::Create { name: v });
                             self.set_toast("creating…", false);
@@ -417,6 +415,31 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Join from a pasted invite, a file or a URL (TUI-JOIN-INPUT-001).
+    /// Plain http:// asks first, since anyone on the path can read the invite.
+    fn join_input(&mut self, v: &str) {
+        match crate::join_input::classify(v) {
+            JoinInput::Code(code) => {
+                self.act(Action::Join { code });
+                self.set_toast("joining…", false);
+            }
+            JoinInput::File(path) => {
+                self.act(Action::JoinFile { path });
+                self.set_toast("reading invite file…", false);
+            }
+            JoinInput::Url { url, http: false } => {
+                self.act(Action::JoinUrl { url, allow_http: false });
+                self.set_toast("fetching invite…", false);
+            }
+            JoinInput::Url { url, http: true } => {
+                self.mode = Mode::Confirm {
+                    prompt: "Plain HTTP: anyone on the path can read the invite. Fetch anyway?".into(),
+                    action: Action::JoinUrl { url, allow_http: true },
+                };
+            }
         }
     }
 

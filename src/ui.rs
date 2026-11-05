@@ -529,7 +529,7 @@ fn draw_help(f: &mut Frame) {
         key("c / d", "connect / standby selected network"),
         key("C / D", "connect / standby ALL networks"),
         key("i", "create invite (shows code + QR, y copies)"),
-        key("n", "new network      J  join by invite code"),
+        key("n", "new network      J  join by invite, file or URL"),
         key("S", "stop daemon  ·  s: start (when down)"),
         Line::raw(""),
         Line::styled("  admin (coordinator):", Style::new().fg(C_DIM).italic()),
@@ -553,7 +553,7 @@ fn draw_help(f: &mut Frame) {
 
 fn draw_input(f: &mut Frame, kind: InputKind, buf: &str) {
     let (title, hint) = match kind {
-        InputKind::Join => (" Join by invite code ", "paste the code, then Enter"),
+        InputKind::Join => (" Join by invite, file or URL ", "paste the invite, a file path or an http(s) URL, then Enter"),
         InputKind::Create => (" New network ", "type a name, then Enter"),
     };
     let area = centered(f.area(), 64, 6);

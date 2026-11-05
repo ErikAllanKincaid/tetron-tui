@@ -7,6 +7,7 @@
 mod action;
 mod app;
 mod ipc_client;
+mod join_input;
 mod model;
 mod ui;
 

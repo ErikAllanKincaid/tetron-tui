@@ -13,7 +13,7 @@ An interactive terminal UI for the [tetron](https://github.com/ErikAllanKincaid/
 - **Transport**: conn type (direct/relay/tor/veilid), candidate paths with the why-not-direct reason, live MTU.
 - **History**: btop-style braille charts of rtt and tx/rx throughput (rates derived from byte-counter deltas).
 - **Admin**: key-holders, pending nuke proposals, and the admin actions.
-- Actions: resume/standby (per network and global), create invite (shown as text + scannable QR), join by code, create network, stop/start the daemon, grant-admin, kick, nuke, leave.
+- Actions: resume/standby (per network and global), create invite (shown as text + scannable QR), join by invite, file or URL (fetched with curl; plain http:// asks first), create network, stop/start the daemon, grant-admin, kick, nuke, leave.
 - `Enter` on a connected peer opens an SSH session to its overlay IP; `y` or the toolbar button copies the selected peer's IP (OSC 52, works over SSH).
 
 Press `?` in the app for the full key list. Clickable, colored action buttons are along the bottom.
