@@ -13,7 +13,7 @@ path = "src/main.rs"
 [dependencies]
 # Pinned to a core release tag so the msgpack schema matches the daemon.
 # Bump with contrib/bump-proto.sh.
-tetron-proto = { git = "https://github.com/ErikAllanKincaid/tetron", tag = "v0.15.2" }
+tetron-proto = { git = "https://github.com/tetronos/tetron", tag = "v0.15.2" }
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "process"] }

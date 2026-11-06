@@ -8,7 +8,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-ACTION = "ErikAllanKincaid/tetron-packaging"
+ACTION = "tetronos/tetron-packaging"
 WORKFLOW = Path(".github/workflows/release.yml")
 
 

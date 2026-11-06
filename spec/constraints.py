@@ -15,7 +15,7 @@ class DebTomlValid(Constraint):
 class ActionPinnedBySha(Constraint):
     """CONSTRAINT-ID: CON-D02
 
-    Every use of ErikAllanKincaid/tetron-packaging in .github/workflows is
+    Every use of tetronos/tetron-packaging in .github/workflows is
     pinned to a full 40 hex character commit SHA.
     ENFORCEMENT (reconcile.py): workflow.unpinned equals 0 and
     workflow.uses_action is true.

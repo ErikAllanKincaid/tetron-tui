@@ -3078,7 +3078,7 @@ dependencies = [
 [[package]]
 name = "tetron-proto"
 version = "0.15.2"
-source = "git+https://github.com/ErikAllanKincaid/tetron?tag=v0.15.2#ea9b8409aa0f0d1dbb4fbd33ba3fdefc9f5b1232"
+source = "git+https://github.com/tetronos/tetron?tag=v0.15.2#ea9b8409aa0f0d1dbb4fbd33ba3fdefc9f5b1232"
 dependencies = [
  "anyhow",
  "blake3",
