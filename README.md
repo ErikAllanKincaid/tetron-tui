@@ -1,6 +1,6 @@
 # tetron-tui
 
-An interactive terminal UI for the [tetron](https://github.com/ErikAllanKincaid/tetron) P2P mesh VPN. Standalone, keyboard-first and mouse-capable, truecolor, and usable at the local console or over plain SSH, with or without a desktop. It talks to the local tetron daemon over its Unix control socket (`tetron-proto`), so it needs a running daemon on the same host.
+An interactive terminal UI for the [tetron](https://github.com/tetronos/tetron) P2P mesh VPN. Standalone, keyboard-first and mouse-capable, truecolor, and usable at the local console or over plain SSH, with or without a desktop. It talks to the local tetron daemon over its Unix control socket (`tetron-proto`), so it needs a running daemon on the same host.
 
 <p align="center">
   <img src="assets/tetron-tui.png" alt="tetron-tui: networks on the left, peers with direct or relay path and round-trip time on the right, key hints along the bottom" width="800">
@@ -20,11 +20,11 @@ Press `?` in the app for the full key list. Clickable, colored action buttons ar
 
 ## Install
 
-The primary install path is a prebuilt binary from the [releases page](https://github.com/ErikAllanKincaid/tetron-tui/releases), which the tetron suite installer (`install-tetron-suite.sh`) places by default. Drop it on your `PATH` (e.g. `~/.local/bin/tetron-tui` or `/usr/local/bin/tetron-tui`) and run `tetron-tui`.
+The primary install path is a prebuilt binary from the [releases page](https://github.com/tetronos/tetron-tui/releases), which the tetron suite installer (`install-tetron-suite.sh`) places by default. Drop it on your `PATH` (e.g. `~/.local/bin/tetron-tui` or `/usr/local/bin/tetron-tui`) and run `tetron-tui`.
 
 ### Debian and Ubuntu (.deb)
 
-Each release also carries `tetron-tui_<version>-1_<arch>.deb` for amd64 and arm64, with a `.sha256` file. Install with `sudo apt install ./tetron-tui_<version>-1_amd64.deb`. The package installs `/usr/bin/tetron-tui` and recommends the `tetron` daemon package for the same minor version (tetron-tui 0.14.x targets tetron 0.14), which is optional because the daemon can also come from a binary install. Use one method per host: a copy in `/usr/local/bin` (from the suite installer) comes first on `PATH` and would shadow the packaged binary, so remove it before installing the package. The package is built in release CI by [tetron-packaging](https://github.com/ErikAllanKincaid/tetron-packaging) from the same binary as the raw asset and tested in a clean `debian:trixie` container before upload.
+Each release also carries `tetron-tui_<version>-1_<arch>.deb` for amd64 and arm64, with a `.sha256` file. Install with `sudo apt install ./tetron-tui_<version>-1_amd64.deb`. The package installs `/usr/bin/tetron-tui` and recommends the `tetron` daemon package for the same minor version (tetron-tui 0.14.x targets tetron 0.14), which is optional because the daemon can also come from a binary install. Use one method per host: a copy in `/usr/local/bin` (from the suite installer) comes first on `PATH` and would shadow the packaged binary, so remove it before installing the package. The package is built in release CI by [tetron-packaging](https://github.com/tetronos/tetron-packaging) from the same binary as the raw asset and tested in a clean `debian:trixie` container before upload.
 
 ## Build from source
 
